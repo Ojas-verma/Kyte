@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/member.dart';
 import '../providers/member_provider.dart';
+import '../utils/app_transitions.dart';
 import 'add_member_screen.dart';
 import '../utils/app_theme.dart';
 
@@ -169,8 +170,8 @@ Future<void> showMemberProfileSheet(
                           Navigator.of(context).pop();
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             Navigator.of(rootContext).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => AddMemberScreen(member: member),
+                              buildFadeSlideRoute<void>(
+                                AddMemberScreen(member: member),
                               ),
                             );
                           });
@@ -191,7 +192,9 @@ Future<void> showMemberProfileSheet(
                             return;
                           }
 
-                          await rootContext.read<MemberProvider>().deleteSubtree(member.id);
+                          await rootContext
+                              .read<MemberProvider>()
+                              .deleteSubtree(member.id);
                           if (!rootContext.mounted) {
                             return;
                           }
@@ -201,7 +204,10 @@ Future<void> showMemberProfileSheet(
                             SnackBar(content: Text('${member.name} deleted')),
                           );
                         },
-                        icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 16,
+                        ),
                         label: const Text('Delete'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.redAccent,

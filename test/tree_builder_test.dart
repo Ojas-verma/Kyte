@@ -48,4 +48,30 @@ void main() {
     expect(tree.first.children.first.children.first.member.id, 'grandchild-a1');
     expect(tree.last.children, isEmpty);
   });
+
+  test('buildTree promotes orphaned manager references to root', () {
+    final members = <Member>[
+      const Member(
+        id: 'root-a',
+        name: 'Root A',
+        role: 'Engineering Manager',
+        department: 'Engineering',
+        team: 'Platform',
+      ),
+      const Member(
+        id: 'orphan-a',
+        name: 'Orphan Member',
+        role: 'SDE II',
+        department: 'Engineering',
+        team: 'Core',
+        managerId: 'missing-manager',
+      ),
+    ];
+
+    final tree = buildTree(members);
+    final orphanNode = tree.firstWhere((node) => node.member.id == 'orphan-a');
+
+    expect(tree, hasLength(2));
+    expect(orphanNode.isOrphan, isTrue);
+  });
 }

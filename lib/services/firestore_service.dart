@@ -5,11 +5,24 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/member.dart';
 import '../utils/demo_member_seed.dart';
 
+class MemberDataException implements Exception {
+  const MemberDataException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class FirestoreService {
   FirestoreService({bool demoMode = false})
     : _demoMode = demoMode,
       _demoMembers = List<Member>.from(demoMembers),
-      _demoController = StreamController<List<Member>>.broadcast();
+      _demoController = StreamController<List<Member>>.broadcast() {
+    if (!_demoMode) {
+      _configureFirestore();
+    }
+  }
 
   final bool _demoMode;
   final List<Member> _demoMembers;
@@ -22,15 +35,25 @@ class FirestoreService {
 
   bool get isDemoMode => _demoMode;
 
+  void _configureFirestore() {
+    try {
+      _firestoreClient.settings = const Settings(persistenceEnabled: true);
+    } catch (_) {
+      // If settings are already applied, keep the existing instance configuration.
+    }
+  }
+
   Future<List<Member>> getMembersOnce() async {
     if (_demoMode) {
       return _sortedDemoMembers();
     }
 
-    final snapshot = await _firestoreClient.collection('members').get();
-    final members = snapshot.docs.map(Member.fromFirestore).toList();
-    members.sort((left, right) => left.name.compareTo(right.name));
-    return members;
+    return _executeWithRetry(() async {
+      final snapshot = await _firestoreClient.collection('members').get();
+      final members = snapshot.docs.map(Member.fromFirestore).toList();
+      members.sort((left, right) => left.name.compareTo(right.name));
+      return members;
+    }, defaultMessage: 'Unable to load members right now.');
   }
 
   Future<Member?> getMemberById(String memberId) async {
@@ -47,11 +70,16 @@ class FirestoreService {
       return null;
     }
 
-    final doc = await _firestoreClient.collection('members').doc(memberId).get();
-    if (!doc.exists) {
-      return null;
-    }
-    return Member.fromFirestore(doc);
+    return _executeWithRetry(() async {
+      final doc = await _firestoreClient
+          .collection('members')
+          .doc(memberId)
+          .get();
+      if (!doc.exists) {
+        return null;
+      }
+      return Member.fromFirestore(doc);
+    }, defaultMessage: 'Unable to load this member right now.');
   }
 
   Future<bool> isCircular(String memberId, String? newManagerId) async {
@@ -87,11 +115,42 @@ class FirestoreService {
       return _demoController.stream;
     }
 
-    return _firestoreClient.collection('members').snapshots().map((snapshot) {
-      final members = snapshot.docs.map(Member.fromFirestore).toList();
-      members.sort((left, right) => left.name.compareTo(right.name));
-      return members;
-    });
+    return _firestoreClient
+        .collection('members')
+        .snapshots()
+        .map((snapshot) {
+          final members = snapshot.docs.map(Member.fromFirestore).toList();
+          members.sort((left, right) => left.name.compareTo(right.name));
+          return members;
+        })
+        .handleError((Object error) {
+          throw MemberDataException(
+            _friendlyErrorMessage(
+              error,
+              defaultMessage: 'Unable to stream member updates right now.',
+            ),
+          );
+        });
+  }
+
+  Future<void> ensureSeedDataIfEmpty() async {
+    if (_demoMode) {
+      return;
+    }
+
+    await _executeWithRetry(() async {
+      final collection = _firestoreClient.collection('members');
+      final existing = await collection.limit(1).get();
+      if (existing.docs.isNotEmpty) {
+        return;
+      }
+
+      final batch = _firestoreClient.batch();
+      for (final member in demoMembers) {
+        batch.set(collection.doc(member.id), member.toMap());
+      }
+      await batch.commit();
+    }, defaultMessage: 'Unable to seed members right now.');
   }
 
   void emitCurrentMembers() {
@@ -112,12 +171,14 @@ class FirestoreService {
       return newMember.id;
     }
 
-    final docRef = member.id.isEmpty
-        ? _firestoreClient.collection('members').doc()
-        : _firestoreClient.collection('members').doc(member.id);
-    final payload = member.copyWith(id: docRef.id);
-    await docRef.set(payload.toMap());
-    return docRef.id;
+    return _executeWithRetry(() async {
+      final docRef = member.id.isEmpty
+          ? _firestoreClient.collection('members').doc()
+          : _firestoreClient.collection('members').doc(member.id);
+      final payload = member.copyWith(id: docRef.id);
+      await docRef.set(payload.toMap());
+      return docRef.id;
+    }, defaultMessage: 'Unable to add member right now.');
   }
 
   Future<void> updateMember(Member member) async {
@@ -130,10 +191,12 @@ class FirestoreService {
       return;
     }
 
-    await _firestoreClient
-        .collection('members')
-        .doc(member.id)
-        .set(member.toMap());
+    await _executeWithRetry(() async {
+      await _firestoreClient
+          .collection('members')
+          .doc(member.id)
+          .set(member.toMap());
+    }, defaultMessage: 'Unable to update member right now.');
   }
 
   Future<void> deleteMember(String memberId) async {
@@ -143,7 +206,9 @@ class FirestoreService {
       return;
     }
 
-    await _firestoreClient.collection('members').doc(memberId).delete();
+    await _executeWithRetry(() async {
+      await _firestoreClient.collection('members').doc(memberId).delete();
+    }, defaultMessage: 'Unable to delete member right now.');
   }
 
   Future<void> deleteSubtree(String memberId) async {
@@ -159,14 +224,73 @@ class FirestoreService {
     const batchLimit = 500;
     var index = 0;
     while (index < idsToDelete.length) {
-      final batch = _firestoreClient.batch();
       final chunkEnd = (index + batchLimit).clamp(0, idsToDelete.length);
-      for (final id in idsToDelete.sublist(index, chunkEnd)) {
-        batch.delete(_firestoreClient.collection('members').doc(id));
-      }
-      await batch.commit();
+      await _executeWithRetry(() async {
+        final batch = _firestoreClient.batch();
+        for (final id in idsToDelete.sublist(index, chunkEnd)) {
+          batch.delete(_firestoreClient.collection('members').doc(id));
+        }
+        await batch.commit();
+      }, defaultMessage: 'Unable to delete this subtree right now.');
       index = chunkEnd;
     }
+  }
+
+  bool _isTransientError(Object error) {
+    if (error is! FirebaseException) {
+      return false;
+    }
+
+    return error.code == 'unavailable' ||
+        error.code == 'deadline-exceeded' ||
+        error.code == 'aborted';
+  }
+
+  Future<T> _executeWithRetry<T>(
+    Future<T> Function() operation, {
+    required String defaultMessage,
+    int maxAttempts = 3,
+  }) async {
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        return await operation();
+      } catch (error) {
+        final shouldRetry = attempt < maxAttempts && _isTransientError(error);
+        if (shouldRetry) {
+          final delayMs = 300 * (1 << (attempt - 1));
+          await Future<void>.delayed(Duration(milliseconds: delayMs));
+          continue;
+        }
+
+        throw MemberDataException(
+          _friendlyErrorMessage(error, defaultMessage: defaultMessage),
+        );
+      }
+    }
+  }
+
+  String _friendlyErrorMessage(Object error, {required String defaultMessage}) {
+    if (error is FirebaseException) {
+      if (error.code == 'permission-denied') {
+        return 'Access denied. Please check Firestore rules.';
+      }
+
+      if (error.code == 'unavailable') {
+        return 'Service unavailable. Please try again.';
+      }
+
+      if (error.code == 'deadline-exceeded') {
+        return 'Request timed out. Please try again.';
+      }
+    }
+
+    if (error is MemberDataException) {
+      return error.message;
+    }
+
+    return defaultMessage;
   }
 
   List<String> _collectSubtreeIds(String rootMemberId, List<Member> members) {

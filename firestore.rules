@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Demo rules: open read/write access for the members collection.
+    match /members/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

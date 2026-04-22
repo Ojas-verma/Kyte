@@ -10,7 +10,7 @@ void main() {
 
     expect(find.text('Kyte'), findsOneWidget);
     expect(find.text('Demo mode'), findsOneWidget);
-    expect(find.text('Phase 4 tree core'), findsOneWidget);
+    expect(find.text('Phase 7 resilience hardening'), findsOneWidget);
     expect(find.text('Org chart'), findsOneWidget);
     expect(find.text('Ava Chen'), findsWidgets);
   });

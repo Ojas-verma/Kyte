@@ -18,7 +18,7 @@ class KyteApp extends StatelessWidget {
       create: (_) =>
           MemberProvider(FirestoreService(demoMode: bootstrap.demoMode)),
       child: MaterialApp(
-        debugShowCheckedModeBanner: false,
+        debugShowCheckedModeBanner:  false,
         title: 'Kyte',
         theme: AppTheme.dark(),
         home: HomeScreen(bootstrap: bootstrap),
